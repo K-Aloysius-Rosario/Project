@@ -1,49 +1,80 @@
-import paramiko
+import socket
 import threading
-import getpass
+import paramiko
 
-def receive_messages(channel):
-    while True:
-        try:
-            data = channel.recv(1024).decode()
-            if data:
-                print("\n" + data.strip())
-        except:
-            break
+clients = {}  # username -> channel
 
-def start_client():
-    host = input("Server IP: ").strip()
-    port = input("Port (default 2222): ").strip()
-    port = int(port) if port else 2222
+HOST_KEY = paramiko.RSAKey.generate(2048)
 
-    username = input("Username: ")
-    password = getpass.getpass("Password: ")
+class SSHServer(paramiko.ServerInterface):
+    def __init__(self):
+        self.event = threading.Event()
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    def check_auth_password(self, username, password):
+        return paramiko.AUTH_SUCCESSFUL
 
-    client.connect(
-        hostname=host,
-        port=port,
-        username=username,
-        password=password
-    )
+    def get_allowed_auths(self, username):
+        return "password"
 
-    channel = client.invoke_shell()
-    print(channel.recv(1024).decode())
+    def check_channel_request(self, kind, chanid):
+        if kind == "session":
+            return paramiko.OPEN_SUCCEEDED
+        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
-    threading.Thread(target=receive_messages, args=(channel,), daemon=True).start()
-
+def client_handler(chan, addr):
     try:
+        username = chan.recv(1024).decode().strip()
+        clients[username] = chan
+        print(f"[+] {username} connected from {addr}")
+
         while True:
-            msg = input()
-            if msg.lower() in ["exit", "quit"]:
+            data = chan.recv(1024)
+            if not data:
                 break
-            channel.send(msg + "\n")
+
+            message = data.decode().strip()
+            if "|" not in message:
+                chan.send(b"Format: target|message\n")
+                continue
+
+            target, msg = message.split("|", 1)
+            if target in clients:
+                clients[target].send(f"{username}: {msg}\n".encode())
+            else:
+                chan.send(b"User not found\n")
+
+    except Exception as e:
+        print(f"[!] Error: {e}")
     finally:
-        client.close()
-        print("Disconnected.")
+        clients.pop(username, None)
+        chan.close()
+        print(f"[-] {username} disconnected")
+
+def main():
+    host = input("Bind IP (e.g. 0.0.0.0 or 127.0.0.1): ").strip()
+    port = int(input("Port (e.g. 2222): ").strip())
+
+    sock = socket.socket()
+    sock.bind((host, port))
+    sock.listen(100)
+
+    print(f"[+] SSH Messenger Server running on {host}:{port}")
+
+    while True:
+        client, addr = sock.accept()
+        transport = paramiko.Transport(client)
+        transport.add_server_key(HOST_KEY)
+
+        server = SSHServer()
+        transport.start_server(server=server)
+
+        chan = transport.accept(20)
+        if chan:
+            threading.Thread(
+                target=client_handler,
+                args=(chan, addr),
+                daemon=True
+            ).start()
 
 if __name__ == "__main__":
-    start_client()
-
+    main()
