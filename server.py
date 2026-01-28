@@ -3,7 +3,6 @@ import threading
 import paramiko
 
 clients = {}  # username -> channel
-
 HOST_KEY = paramiko.RSAKey.generate(2048)
 
 class SSHServer(paramiko.ServerInterface):
@@ -21,9 +20,16 @@ class SSHServer(paramiko.ServerInterface):
             return paramiko.OPEN_SUCCEEDED
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
+
 def client_handler(chan, addr):
+    username = None
     try:
+        # Receive username first (sent by client after session opens)
         username = chan.recv(1024).decode().strip()
+        if not username:
+            chan.close()
+            return
+
         clients[username] = chan
         print(f"[+] {username} connected from {addr}")
 
@@ -33,22 +39,29 @@ def client_handler(chan, addr):
                 break
 
             message = data.decode().strip()
+
+            # Expected format: target|message
             if "|" not in message:
-                chan.send(b"Format: target|message\n")
+                chan.send(b"System|Format should be target|message\n")
                 continue
 
             target, msg = message.split("|", 1)
+
             if target in clients:
-                clients[target].send(f"{username}: {msg}\n".encode())
+                # SEND IN CLIENT-EXPECTED FORMAT
+                clients[target].send(f"{username}|{msg}\n".encode())
             else:
-                chan.send(b"User not found\n")
+                chan.send(b"System|User not found\n")
 
     except Exception as e:
-        print(f"[!] Error: {e}")
+        print(f"[!] Error with {addr}: {e}")
+
     finally:
-        clients.pop(username, None)
+        if username in clients:
+            clients.pop(username)
         chan.close()
         print(f"[-] {username} disconnected")
+
 
 def main():
     host = input("Bind IP (e.g. 0.0.0.0 or 127.0.0.1): ").strip()
@@ -75,6 +88,7 @@ def main():
                 args=(chan, addr),
                 daemon=True
             ).start()
+
 
 if __name__ == "__main__":
     main()
