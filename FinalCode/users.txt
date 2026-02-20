@@ -1,0 +1,11 @@
+admin:password
+user1:1234
+user2:1234
+bob:bob
+arun:arun
+alice:alice
+aasif:aasif
+anbu:anbu
+rosario:rosario
+aloysius:aloysius
+
